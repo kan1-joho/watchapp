@@ -1,5 +1,5 @@
 import { VIEW_HALF, isHit, isNearBoundary, pointToWorld } from './geometry.js';
-import { createStore, statsOf, totalStats } from './store.js';
+import { createStore, SHOTS, statsOf, totalStats } from './store.js';
 import { openDb, loadShots, saveShots } from './db.js';
 
 const MEMBERS = ['青木', '伊藤', '上田', '江口', '小野', '加藤'].map((n, i) => ({ id: 't' + (i + 1), name: n })); // テスト名簿
@@ -10,9 +10,11 @@ const view = () => ({ half, flip });
 const say = (t, warn) => { $('msg').textContent = t; $('msg').className = warn ? 'warn' : ''; };
 const info = r => !r ? { t: '未入力', s: '－' } : r.status === 'unlocated_miss' ? { t: '位置不明の外れ', s: '？' } : isHit(r.x, r.y) ? { t: '的中', s: '○' } : { t: '外れ', s: '×' };
 
-let db = null;
-try { db = await openDb(); } catch { say('この端末では保存できません。記録は画面を閉じると消えます', true); }
-const store = createStore(MEMBERS, db ? await loadShots(db).catch(() => ({})) : {});
+// iPadにはデバッグ画面がないため、想定外のエラーも画面に出す
+addEventListener('error', e => say(`エラー: ${e.message}`, true));
+addEventListener('unhandledrejection', e => say(`エラー: ${e.reason && e.reason.message || e.reason}`, true));
+let db = null, dbPending = true; // 保存領域の準備が終わるまでは記録しない（読み込み前の入力を上書きしないため）
+const store = createStore(MEMBERS);
 store.subscribe(render);
 store.subscribe((s, dirty) => { if (dirty && db) saveShots(db, s.records).catch(() => say('保存に失敗しました', true)); });
 
@@ -61,6 +63,7 @@ let drag = null;
 const apply = e => { const w = pointToWorld(e.clientX, e.clientY, $('target').getBoundingClientRect(), view()); const r = store.place(drag.i, w.x, w.y); if (!r.ok) say(r.reason, true); return r.ok; };
 const target = $('target');
 target.addEventListener('pointerdown', e => {
+  if (dbPending) return say('保存領域を準備中です。少しお待ちください', true);
   const s = store.state; if (s.sel == null) return say('4射とも入力済みです。修正する射の番号を選んでください', true);
   e.preventDefault(); target.setPointerCapture(e.pointerId);
   drag = { i: s.sel, before: store.snap() }; apply(e);
@@ -82,3 +85,16 @@ $('jump').onchange = e => { store.goto(+e.target.value); say(''); };
 $('flip').onchange = e => { flip = e.target.checked; try { localStorage.setItem('flip', flip ? '1' : '0'); } catch {} render(); };
 $('half').onchange = e => { half = +e.target.value; try { localStorage.setItem('half', half); } catch {} render(); };
 render();
+
+// 画面の描画とボタン登録を先に済ませ、IndexedDBは後から非同期で準備する（応答しなくても画面は動く）
+const withTimeout = (p, ms) => new Promise((res, rej) => { const t = setTimeout(() => rej(new Error('応答がありません')), ms); p.then(v => { clearTimeout(t); res(v); }, e => { clearTimeout(t); rej(e); }); });
+(async () => {
+  say('保存領域を準備中…');
+  try {
+    const d = await withTimeout(openDb(), 4000), saved = await withTimeout(loadShots(d), 4000), recs = {};
+    for (const m of MEMBERS) recs[m.id] = saved[m.id] || Array(SHOTS).fill(null);
+    const k = recs[MEMBERS[0].id].indexOf(null);
+    store.restore({ records: recs, mi: 0, sel: k < 0 ? null : k }); db = d; say('');
+  } catch (e) { say(`保存領域を使えません（${e.name || ''} ${e.message || ''}）。記録は画面を閉じると消えます`, true); }
+  dbPending = false;
+})();
