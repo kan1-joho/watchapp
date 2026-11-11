@@ -20,7 +20,7 @@ label{display:flex;align-items:center;gap:8px;min-height:44px}input[type=checkbo
 @media (orientation:landscape){main{grid-template-columns:auto 1fr}#target{width:min(56vw,calc(100vh - 110px))}#stage{align-self:start}}
 #save{margin-left:auto;padding:4px 12px;border-radius:999px;font-size:15px;background:#4b5663;color:#fff}#save.ok{background:#1f6f3e}#save.bad{background:var(--warn)}.uns{color:var(--warn);font-weight:700}
 </style></head><body>
-<header><div id="who"></div><div id="now"></div><b id="save"></b><small id="build" style="opacity:.7">build B4</small></header>
+<header><div id="who"></div><div id="now"></div><b id="save"></b><small id="build" style="opacity:.7">build B4（1ファイル版）</small></header>
 <pre id="diag" hidden style="margin:0;padding:8px 12px;background:#fde8e6;color:#8a1a12;white-space:pre-wrap;font:14px/1.5 system-ui,sans-serif"></pre>
 <main>
 <div id="stage"><svg id="target" role="img" aria-label="的。タップで着弾位置を記録"></svg><div id="msg" role="status" aria-live="polite"></div></div>
@@ -46,5 +46,207 @@ label{display:flex;align-items:center;gap:8px;min-height:44px}input[type=checkbo
 })();
 </script>
 <script nomodule>document.getElementById('diag').hidden = false; document.getElementById('diag').textContent = 'このブラウザは ES Modules に対応していません（iPadOSを更新してください）';</script>
-<script type="module" src="src/app.js?v=B4"></script>
+<script type="module">
+// 純粋関数のみ。座標系: 的中心が原点、的半径=1.0、右が+x、下が+y（射手から的を正面に見た向き）
+const HIT_RADIUS = 1.0, BOUNDARY_BAND = 0.10, MAX_ABS = 10, VIEW_HALF = 2.0;
+const EPS = 1e-12;
+const radius = (x, y) => Math.hypot(x, y);
+const isHit = (x, y, hitR = HIT_RADIUS) => radius(x, y) <= hitR + EPS; // 円周を含む
+const isNearBoundary = (x, y, hitR = HIT_RADIUS) => Math.abs(radius(x, y) - hitR) <= BOUNDARY_BAND + EPS; // 注意表示のみ
+function validatePosition(x, y) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return { ok: false, reason: '座標が数値ではないため保存しません' };
+  if (Math.abs(x) > MAX_ABS || Math.abs(y) > MAX_ABS) return { ok: false, reason: `|x|または|y|が${MAX_ABS}を超えるため、誤入力防止で保存しません` };
+  return { ok: true };
+}
+// 画面座標(px,py) → 保存座標。rectは正方形のSVG要素のgetBoundingClientRect()。flipは表示だけの左右反転
+function pointToWorld(px, py, rect, { half = VIEW_HALF, flip = false } = {}) {
+  const sx = ((px - rect.left) / rect.width * 2 - 1) * half;
+  return { x: flip ? 0 - sx : sx, y: ((py - rect.top) / rect.height * 2 - 1) * half };
+}
+function worldToPoint(x, y, rect, { half = VIEW_HALF, flip = false } = {}) {
+  const sx = flip ? 0 - x : x;
+  return { px: rect.left + (sx / half + 1) / 2 * rect.width, py: rect.top + (y / half + 1) / 2 * rect.height };
+}
+
+
+const SHOTS = 4;
+const clone = o => JSON.parse(JSON.stringify(o));
+// 射レコード: null=未入力 / {status:'located',x,y} / {status:'unlocated_miss'}。的中/外れは座標から算出し保存しない
+function createStore(members, init = {}) {
+  const s = { members, records: {}, mi: 0, sel: 0 };
+  for (const m of members) s.records[m.id] = init[m.id] ? clone(init[m.id]) : Array(SHOTS).fill(null);
+  const undoStack = [], subs = [];
+  const emit = (dirty = false) => subs.forEach(f => f(s, dirty));
+  const rec = () => s.records[members[s.mi].id];
+  const firstEmpty = a => { const k = a.indexOf(null); return k < 0 ? null : k; };
+  const snap = () => clone({ records: s.records, mi: s.mi, sel: s.sel });
+  const push = p => { if (JSON.stringify(p.records) !== JSON.stringify(s.records)) undoStack.push(p); };
+  s.sel = firstEmpty(rec());
+  return {
+    state: s, snap, canUndo: () => undoStack.length > 0,
+    subscribe: f => subs.push(f),
+    restore(p) { Object.assign(s, clone(p)); emit(true); },
+    select(i) { s.sel = i; emit(); },
+    place(i, x, y) { const v = validatePosition(x, y); if (!v.ok) return v; rec()[i] = { status: 'located', x, y }; emit(); return v; },
+    settle(before) { push(before); s.sel = firstEmpty(rec()); emit(true); }, // タップ/ドラッグ確定。Undoは1件
+    unlocated(i) { const p = snap(); rec()[i] = { status: 'unlocated_miss' }; push(p); s.sel = firstEmpty(rec()); emit(true); },
+    remove(i) { if (!rec()[i]) return false; const p = snap(); rec()[i] = null; push(p); s.sel = i; emit(true); return true; },
+    undo() { const p = undoStack.pop(); if (p) this.restore(p); return !!p; },
+    goto(k) { if (k < 0 || k >= members.length) return false; s.mi = k; s.sel = firstEmpty(rec()); emit(); return true; },
+    next() { return this.goto(s.mi + 1); }, prev() { return this.goto(s.mi - 1); },
+  };
+}
+// 的中率の分母は記録済みの射数（未入力は含めない。位置不明の外れは含める）
+const statsOf = arr => { const d = arr.filter(Boolean); return { recorded: d.length, hits: d.filter(r => r.status === 'located' && isHit(r.x, r.y)).length }; };
+const totalStats = recs => Object.values(recs).map(statsOf).reduce((a, b) => ({ recorded: a.recorded + b.recorded, hits: a.hits + b.hits }), { recorded: 0, hits: 0 });
+
+
+const NAME = 'kyudo-hit-position', VERSION = 1, SESSION = 'test-session';
+const migrations = { 1(db) { db.createObjectStore('shots', { keyPath: 'id' }); db.createObjectStore('meta', { keyPath: 'key' }); } };
+const openDb = () => new Promise((res, rej) => {
+  const q = indexedDB.open(NAME, VERSION);
+  q.onupgradeneeded = e => { for (let v = e.oldVersion + 1; v <= e.newVersion; v++) migrations[v](q.result, q.transaction); };
+  q.onblocked = () => rej(new Error('他のタブが使用中です')); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error);
+});
+const done = tx => new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = tx.onabort = () => rej(tx.error); });
+async function loadShots(db) {
+  const tx = db.transaction('shots'), q = tx.objectStore('shots').getAll(); await done(tx);
+  const out = {};
+  for (const r of q.result) if (r.sessionId === SESSION)
+    (out[r.memberId] || (out[r.memberId] = Array(SHOTS).fill(null)))[r.shotIndex] = r.status === 'located' ? { status: 'located', x: r.x, y: r.y } : { status: 'unlocated_miss' };
+  return out;
+}
+async function saveShots(db, records) { // STEP 1: 単一セッションを全置換（STEP 2以降で練習日単位に拡張）
+  const tx = db.transaction('shots', 'readwrite'), st = tx.objectStore('shots'), now = Date.now();
+  st.clear();
+  for (const [mid, arr] of Object.entries(records)) arr.forEach((r, i) => {
+    if (r) st.put({ id: `${SESSION}:${mid}:${i}`, sessionId: SESSION, memberId: mid, shotIndex: i, status: r.status, ...(r.status === 'located' ? { x: r.x, y: r.y } : {}), updatedAt: now });
+  });
+  return done(tx);
+}
+
+window.__booted = true;
+
+
+
+
+const MEMBERS = ['青木', '伊藤', '上田', '江口', '小野', '加藤'].map((n, i) => ({ id: 't' + (i + 1), name: n })); // テスト名簿
+const $ = id => document.getElementById(id);
+let flip = false, half = VIEW_HALF;
+try { flip = localStorage.getItem('flip') === '1'; half = +localStorage.getItem('half') || VIEW_HALF; } catch {}
+const view = () => ({ half, flip });
+const say = (t, warn) => { $('msg').textContent = t; $('msg').className = warn ? 'warn' : ''; };
+const info = r => !r ? { t: '未入力', s: '－' } : r.status === 'unlocated_miss' ? { t: '位置不明の外れ', s: '？' } : isHit(r.x, r.y) ? { t: '的中', s: '○' } : { t: '外れ', s: '×' };
+
+// iPadにはデバッグ画面がないため、想定外のエラーも画面に出す
+addEventListener('error', e => say(`エラー: ${e.message}`, true));
+addEventListener('unhandledrejection', e => say(`エラー: ${e.reason && e.reason.message || e.reason}`, true));
+let saveState = 'pending', saveReason = '', unsaved = new Set(), seq = 0, okSeq = 0, savedJson = ''; // 保存状態: pending / ok / unavailable
+let db = null, dbPending = true; // 保存領域の準備が終わるまでは記録しない（読み込み前の入力を上書きしないため）
+const store = createStore(MEMBERS);
+store.subscribe(render);
+store.subscribe((s, dirty) => { if (dirty) persist(s); });
+// 保存結果は最新の保存だけを反映する。失敗時は、保存済みの内容との差分の射を「未保存」にする
+const keyDiff = (a, b) => { const A = JSON.parse(a || '{}'), B = JSON.parse(b), out = new Set(); for (const id in B) B[id].forEach((r, i) => { if (JSON.stringify(r) !== JSON.stringify(A[id] && A[id][i])) out.add(`${id}:${i}`); }); return out; };
+function persist(s) {
+  if (!db) return;
+  const mine = ++seq, snap = JSON.stringify(s.records);
+  saveShots(db, s.records).then(() => { if (mine > okSeq) { okSeq = mine; savedJson = snap; } if (mine === seq) unsaved = new Set(); render(); },
+    () => { if (mine === seq) { unsaved = keyDiff(savedJson, snap); say('保存に失敗しました。未保存の射に印を付けています', true); } render(); });
+}
+
+function drawTarget(arr, sel) {
+  const H = half, X = x => flip ? -x : x, u = H / 20, svg = $('target');
+  const dash = `fill="none" stroke="#8a94a0" stroke-width="${u / 12}" stroke-dasharray="${u / 3} ${u / 3}"`;
+  let g = `<rect x="${-H}" y="${-H}" width="${2 * H}" height="${2 * H}" fill="#e9edf1"/>
+    <path d="M${-H} 0H${H}M0 ${-H}V${H}" stroke="#b7c0c9" stroke-width="${u / 8}"/>
+    <circle r="1" fill="#fff" stroke="#1d2733" stroke-width="${u / 3}"/><circle r=".5" fill="none" stroke="#c4ccd4" stroke-width="${u / 8}"/>
+    <circle r=".9" ${dash}/><circle r="1.1" ${dash}/>`;
+  const lab = (x, y, t) => `<text x="${X(x)}" y="${y}" font-size="${u * 1.5}" fill="#4b5663" text-anchor="middle" dominant-baseline="middle">${t}</text>`;
+  g += lab(0, -H * .9, '上') + lab(0, H * .9, '下') + lab(-H * .9, 0, '左') + lab(H * .9, 0, '右'); // 保存座標の向きで配置（反転時は画面上で左右が入れ替わる）
+  arr.forEach((r, i) => {
+    if (!r || r.status !== 'located') return; // 位置不明の外れは的の上に出さない
+    const x = X(r.x), y = r.y, c = isHit(r.x, r.y) ? '#0b6bcb' : '#c4271d';
+    if (isNearBoundary(r.x, r.y)) g += `<circle cx="${x}" cy="${y}" r="${u * 1.6}" fill="none" stroke="#1d2733" stroke-width="${u / 6}" stroke-dasharray="${u / 3} ${u / 4}"/>`;
+    if (i === sel) g += `<circle cx="${x}" cy="${y}" r="${u * 2.1}" fill="none" stroke="#f0a000" stroke-width="${u / 2.5}"/>`;
+    g += isHit(r.x, r.y)
+      ? `<circle cx="${x}" cy="${y}" r="${u}" fill="${c}" stroke="#fff" stroke-width="${u / 4}"/>`
+      : `<path d="M${x - u} ${y - u}L${x + u} ${y + u}M${x - u} ${y + u}L${x + u} ${y - u}" stroke="#fff" stroke-width="${u * .85}" stroke-linecap="round"/><path d="M${x - u} ${y - u}L${x + u} ${y + u}M${x - u} ${y + u}L${x + u} ${y - u}" stroke="${c}" stroke-width="${u * .45}" stroke-linecap="round"/>`;
+    g += `<text x="${x}" y="${y - u * 2.7}" font-size="${u * 1.7}" font-weight="700" fill="#1d2733" text-anchor="middle" stroke="#fff" stroke-width="${u / 3}" paint-order="stroke">${i + 1}</text>`;
+  });
+  svg.setAttribute('viewBox', `${-H} ${-H} ${2 * H} ${2 * H}`);
+  svg.innerHTML = g;
+}
+
+function render() {
+  const s = store.state, last = s.members.length - 1, m = s.members[s.mi], arr = s.records[m.id], st = statsOf(arr), all = totalStats(s.records);
+  $('who').textContent = `${m.name}（${s.mi + 1}/${s.members.length}人目）`;
+  $('now').textContent = s.sel == null ? '4射とも入力済み' : `${s.sel + 1}射目を${arr[s.sel] ? '修正' : '入力'}中`;
+  $('now').className = s.sel == null ? 'done' : '';
+  drawTarget(arr, s.sel);
+  $('chips').innerHTML = arr.map((r, i) => {
+    const f = info(r), near = r && r.status === 'located' && isNearBoundary(r.x, r.y), key = m.id + ':' + i, uns = r ? (saveState === 'unavailable' || unsaved.has(key)) : unsaved.has(key);
+    return `<button data-i="${i}" class="chip${i === s.sel ? ' sel' : ''}"><b>${i + 1}射目</b><span class="sym">${f.s}</span><span>${f.t}</span>${near ? '<small>境界付近</small>' : ''}${uns ? `<small class="uns">${r ? '未保存' : '削除が未保存'}</small>` : ''}</button>`;
+  }).join('');
+  $('unloc').disabled = s.sel == null; $('del').disabled = s.sel == null || !arr[s.sel]; $('undo').disabled = !store.canUndo();
+  $('prev').disabled = s.mi === 0; $('next').disabled = s.mi === last;
+  $('next').textContent = s.mi === last ? '最後の部員です' : '次の部員へ ▶';
+  $('jump').innerHTML = s.members.map((x, k) => `<option value="${k}"${k === s.mi ? ' selected' : ''}>${s.records[x.id].every(Boolean) ? '✓ ' : ''}${x.name}</option>`).join('');
+  $('stats').textContent = `${m.name}：記録${st.recorded}射中${st.hits}中　／　全体：記録${all.recorded}射中${all.hits}中` + (all.recorded ? `（${(all.hits / all.recorded * 100).toFixed(1)}%）` : '');
+  const T = { pending: ['保存準備中', ''], ok: unsaved.size ? [`未保存 ${unsaved.size}件（保存に失敗）`, 'bad'] : ['保存可能', 'ok'], unavailable: ['未保存（保存できません）', 'bad'] }[saveState];
+  $('save').textContent = T[0]; $('save').className = T[1]; $('save').title = saveReason;
+  $('flip').checked = flip; $('half').value = String(half);
+}
+
+let drag = null;
+const apply = e => { const w = pointToWorld(e.clientX, e.clientY, $('target').getBoundingClientRect(), view()); const r = store.place(drag.i, w.x, w.y); if (!r.ok) say(r.reason, true); return r.ok; };
+const target = $('target');
+target.addEventListener('pointerdown', e => {
+  if (dbPending) return say('保存領域を準備中です。少しお待ちください', true);
+  const s = store.state; if (s.sel == null) return say('4射とも入力済みです。修正する射の番号を選んでください', true);
+  e.preventDefault(); target.setPointerCapture(e.pointerId);
+  drag = { i: s.sel, before: store.snap() }; apply(e);
+});
+target.addEventListener('pointermove', e => { if (drag) apply(e); });
+target.addEventListener('pointerup', () => {
+  if (!drag) return; const { i, before } = drag; drag = null; store.settle(before);
+  const f = info(store.state.records[store.state.members[store.state.mi].id][i]);
+  say(`${i + 1}射目：${f.t}`);
+});
+target.addEventListener('pointercancel', () => { if (drag) { store.restore(drag.before); drag = null; } });
+$('chips').onclick = e => { const b = e.target.closest('button'); if (b) { store.select(+b.dataset.i); say(''); } };
+$('unloc').onclick = () => { const i = store.state.sel; store.unlocated(i); say(`${i + 1}射目：位置不明の外れ`); };
+$('del').onclick = () => { const i = store.state.sel; store.remove(i); say(`${i + 1}射目を削除しました（取り消しで戻せます）`); };
+$('undo').onclick = () => { store.undo(); say('直前の操作を取り消しました'); };
+$('prev').onclick = () => { store.prev(); say(''); };
+$('next').onclick = () => { store.next(); say(store.state.mi === store.state.members.length - 1 ? '最後の部員です' : ''); };
+$('jump').onchange = e => { store.goto(+e.target.value); say(''); };
+$('flip').onchange = e => { flip = e.target.checked; try { localStorage.setItem('flip', flip ? '1' : '0'); } catch {} render(); };
+$('half').onchange = e => { half = +e.target.value; try { localStorage.setItem('half', half); } catch {} render(); };
+render();
+
+// 画面の描画とボタン登録を先に済ませ、IndexedDBは後から非同期で準備する（応答しなくても画面は動く）
+// 4秒を超えて遅れて開いた接続は閉じ、保存可能な状態には戻さない（未保存のまま）
+const withTimeout = (p, ms, onLate) => new Promise((res, rej) => {
+  let late = false; const t = setTimeout(() => { late = true; rej(new Error('応答がありません')); }, ms);
+  p.then(v => { if (late) { if (onLate) onLate(v); } else { clearTimeout(t); res(v); } }, e => { if (!late) { clearTimeout(t); rej(e); } });
+});
+(async () => {
+  let d = null;
+  try {
+    d = await withTimeout(openDb(), 4000, late => late.close());
+    const saved = await withTimeout(loadShots(d), 4000), recs = {};
+    for (const m of MEMBERS) recs[m.id] = saved[m.id] || Array(SHOTS).fill(null);
+    const k = recs[MEMBERS[0].id].indexOf(null);
+    store.restore({ records: recs, mi: 0, sel: k < 0 ? null : k });
+    savedJson = JSON.stringify(store.state.records); db = d; saveState = 'ok'; say('');
+  } catch (e) {
+    if (d) { try { d.close(); } catch {} }
+    saveState = 'unavailable'; saveReason = `${e && e.name || ''} ${e && e.message || ''}`.trim() || '原因不明';
+    say(`保存領域を使えません（${saveReason}）。記録は一時的で、画面を閉じると消えます`, true);
+  }
+  dbPending = false; render();
+})();
+
+</script>
 </body></html>
