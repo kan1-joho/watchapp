@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8"><title>ブラウザ座標テスト</title>
+<body style="font:16px system-ui"><h1 id="r">実行中…</h1><pre id="log"></pre>
+<script type="module">
+// ブラウザ上のSVG実描画で、保存座標→画面→保存座標の往復と、SVG自身のCTMとの一致を確認（許容誤差1e-6）
+import { pointToWorld } from '../src/geometry.js';
+const TOL = 1e-6; let worst = 0, n = 0, fail = 0;
+for (const size of [180, 333, 512, 768, 1024]) for (const half of [1.5, 2, 3]) for (const flip of [false, true]) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', `${-half} ${-half} ${2 * half} ${2 * half}`);
+  svg.style.cssText = `position:absolute;left:${size % 97 + 11.3}px;top:${size % 53 + 7.7}px;width:${size}px;height:${size}px`;
+  document.body.append(svg);
+  const rect = svg.getBoundingClientRect(), ctm = svg.getScreenCTM();
+  for (const [x, y] of [[0, 0], [1, 0], [-.37, .81], [1.4, -1.45], [-1.45, 1.45]]) {
+    const pt = svg.createSVGPoint(); pt.x = flip ? -x : x; pt.y = y;      // 反転は描画側で x を符号反転して表現
+    const s = pt.matrixTransform(ctm), w = pointToWorld(s.x, s.y, rect, { half, flip });
+    const e = Math.max(Math.abs(w.x - x), Math.abs(w.y - y)); worst = Math.max(worst, e); n++; if (e >= TOL) fail++;
+  }
+  svg.remove();
+}
+document.getElementById('r').textContent = fail ? `FAIL（${fail}/${n}件が許容超過）` : `PASS（${n}件）`;
+document.getElementById('log').textContent = `最大誤差 ${worst.toExponential(2)}（許容 1e-6）\nUA: ${navigator.userAgent}\nDPR: ${devicePixelRatio}`;
+</script>

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>的中位置記録（STEP 1）</title>
+<style>
+:root{--ink:#1d2733;--sub:#4b5663;--line:#c4ccd4;--bg:#f6f8fa;--acc:#0b6bcb;--warn:#c4271d}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Hiragino Sans",sans-serif;-webkit-touch-callout:none}
+header{display:flex;align-items:baseline;gap:16px;padding:8px 12px;background:var(--ink);color:#fff;flex-wrap:wrap}
+#who{font-size:26px;font-weight:700}#now{font-size:22px;font-weight:700;color:#ffd35c}#now.done{color:#8fe3a3}
+main{display:grid;gap:10px;padding:8px 12px}
+#target{width:min(100%,62vh);aspect-ratio:1;display:block;margin:0 auto;touch-action:none;user-select:none;-webkit-user-select:none;border:2px solid var(--line);border-radius:6px;background:#e9edf1}
+#msg{min-height:1.6em;text-align:center;font-weight:600}#msg.warn{color:var(--warn)}
+aside{display:grid;gap:10px;align-content:start}.row{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:8px}
+#chips{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+button,select{min-height:52px;font:inherit;border:2px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);padding:4px 8px}
+button:disabled{opacity:.4}.chip{display:grid;gap:2px;justify-items:center;align-content:center;min-height:84px;font-size:14px}
+.chip .sym{font-size:26px;font-weight:700;line-height:1}.chip small{color:var(--sub)}.chip.sel{border-color:#f0a000;background:#fff6dc;border-width:3px}
+#next{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:700}#next:disabled{background:#fff;color:var(--sub);border-color:var(--line)}
+label{display:flex;align-items:center;gap:8px;min-height:44px}input[type=checkbox]{width:24px;height:24px}#stats{font-weight:600}
+@media (orientation:landscape){main{grid-template-columns:auto 1fr}#target{width:min(56vw,calc(100vh - 110px))}#stage{align-self:start}}
+</style></head><body>
+<header><div id="who"></div><div id="now"></div></header>
+<main>
+<div id="stage"><svg id="target" role="img" aria-label="的。タップで着弾位置を記録"></svg><div id="msg" role="status" aria-live="polite"></div></div>
+<aside>
+<div id="chips"></div>
+<div class="row"><button id="unloc">？ 位置不明の外れ</button><button id="del">削除</button><button id="undo">取り消し</button></div>
+<div class="row"><button id="prev">◀ 前の部員</button><button id="next"></button></div>
+<select id="jump" aria-label="部員を選ぶ"></select>
+<div id="stats"></div>
+<label><input type="checkbox" id="flip">左右反転表示（保存座標は変わりません）</label>
+<label>表示範囲 <select id="half"><option value="1.5">±1.5</option><option value="2">±2（標準）</option><option value="3">±3</option></select></label>
+</aside></main>
+<script type="module" src="src/app.js"></script>
+</body></html>
