@@ -1,6 +1,7 @@
+window.__booted = true;
 import { VIEW_HALF, isHit, isNearBoundary, pointToWorld } from './geometry.js';
 import { createStore, SHOTS, statsOf, totalStats } from './store.js';
-import { openDb, loadShots, saveShots } from './db.js';
+import { openDb, loadShots, saveShots } from './db.js?v=B2';
 
 const MEMBERS = ['青木', '伊藤', '上田', '江口', '小野', '加藤'].map((n, i) => ({ id: 't' + (i + 1), name: n })); // テスト名簿
 const $ = id => document.getElementById(id);

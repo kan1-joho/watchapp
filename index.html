@@ -19,7 +19,8 @@ button:disabled{opacity:.4}.chip{display:grid;gap:2px;justify-items:center;align
 label{display:flex;align-items:center;gap:8px;min-height:44px}input[type=checkbox]{width:24px;height:24px}#stats{font-weight:600}
 @media (orientation:landscape){main{grid-template-columns:auto 1fr}#target{width:min(56vw,calc(100vh - 110px))}#stage{align-self:start}}
 </style></head><body>
-<header><div id="who"></div><div id="now"></div></header>
+<header><div id="who"></div><div id="now"></div><small id="build" style="margin-left:auto;opacity:.7">build B2</small></header>
+<pre id="diag" hidden style="margin:0;padding:8px 12px;background:#fde8e6;color:#8a1a12;white-space:pre-wrap;font:14px/1.5 system-ui,sans-serif"></pre>
 <main>
 <div id="stage"><svg id="target" role="img" aria-label="的。タップで着弾位置を記録"></svg><div id="msg" role="status" aria-live="polite"></div></div>
 <aside>
@@ -31,5 +32,18 @@ label{display:flex;align-items:center;gap:8px;min-height:44px}input[type=checkbo
 <label><input type="checkbox" id="flip">左右反転表示（保存座標は変わりません）</label>
 <label>表示範囲 <select id="half"><option value="1.5">±1.5</option><option value="2">±2（標準）</option><option value="3">±3</option></select></label>
 </aside></main>
-<script type="module" src="src/app.js"></script>
+<script>
+(function () {
+  var log = [];
+  function show(t) { log.push(t); var e = document.getElementById('diag'); if (e) { e.hidden = false; e.textContent = log.join('\n'); } }
+  addEventListener('error', function (e) {
+    var t = e.target && e.target.src ? '読み込めません: ' + e.target.src.split('/').slice(-2).join('/') : 'エラー: ' + e.message + (e.filename ? ' (' + e.filename.split('/').pop() + ':' + e.lineno + ')' : '');
+    show(t);
+  }, true);
+  if (location.protocol === 'file:') show('file:// で開いています。ES Modules は動かないため、http:// のサーバー経由で開いてください');
+  setTimeout(function () { if (!window.__booted) show('app.js が起動しませんでした（読み込み失敗・構文エラー・古いキャッシュのいずれか）。build B2 の index.html は表示されています'); }, 2500);
+})();
+</script>
+<script nomodule>document.getElementById('diag').hidden = false; document.getElementById('diag').textContent = 'このブラウザは ES Modules に対応していません（iPadOSを更新してください）';</script>
+<script type="module" src="src/app.js?v=B2"></script>
 </body></html>
